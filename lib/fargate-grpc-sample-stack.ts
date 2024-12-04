@@ -1,69 +1,96 @@
 import * as cdk from 'aws-cdk-lib';
+import { Stack, StackProps } from 'aws-cdk-lib';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { Construct } from 'constructs';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as iam from 'aws-cdk-lib/aws-iam';
 
-export class FargateGrpcSampleStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+export class FargateGrpcSampleStack extends Stack {
+  constructor(scope: cdk.App, id: string, props?: StackProps) {
     super(scope, id, props);
 
-    // VPC
-    const vpc = new ec2.Vpc(this, 'Vpc', { maxAzs: 2 });
+    // Create a VPC
+    const vpc = new ec2.Vpc(this, 'GrpcVpc', {
+      maxAzs: 2, // Default is all AZs in the region
+    });
 
-    // ECS Cluster with Cloud Map
-    const cluster = new ecs.Cluster(this, 'EcsCluster', {
+    // Create an ECS cluster
+    const cluster = new ecs.Cluster(this, 'GrpcCluster', {
       vpc,
-      defaultCloudMapNamespace: {
-        name: 'local', // Namespace for service discovery
-      },
     });
 
-    // Security Group for ECS Services
-    const serviceSecurityGroup = new ec2.SecurityGroup(this, 'ServiceSecurityGroup', {
-      vpc,
-      description: 'Allow internal communication between ECS services',
+    // Task role
+    const taskRole = new iam.Role(this, 'TaskRole', {
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
     });
-    serviceSecurityGroup.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4000), 'Allow internal traffic on port 4000');
 
-    // App1 Task Definition
-    const app1TaskDef = new ecs.FargateTaskDefinition(this, 'App1TaskDef');
-    const app1Container = app1TaskDef.addContainer('App1Container', {
-      image: ecs.ContainerImage.fromAsset('./src/app1'),
+    taskRole.addManagedPolicy(
+      iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy')
+    );
+
+    // Create a Fargate Task Definition
+    const taskDefinition = new ecs.FargateTaskDefinition(this, 'GrpcTaskDef', {
       memoryLimitMiB: 512,
-      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'App1' }),
-    });
-    app1Container.addPortMappings({ containerPort: 4000 });
-
-    // App1 ECS Service with Service Discovery
-    new ecs.FargateService(this, 'App1Service', {
-      cluster,
-      taskDefinition: app1TaskDef,
-      desiredCount: 1,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-      cloudMapOptions: {
-        name: 'app1', // Service name in Cloud Map
-      },
-      securityGroups: [serviceSecurityGroup],
+      cpu: 256,
+      taskRole,
     });
 
-    // App2 Task Definition
-    const app2TaskDef = new ecs.FargateTaskDefinition(this, 'App2TaskDef');
-    const app2Container = app2TaskDef.addContainer('App2Container', {
-      image: ecs.ContainerImage.fromAsset('./src/app2'),
-      memoryLimitMiB: 512,
-      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'App2' }),
+    const container = taskDefinition.addContainer('GrpcContainer', {
+      image: ecs.ContainerImage.fromAsset('./docker'), // Use Dockerfile from local directory
       environment: {
-        APP1_SERVICE_URL: 'app1.local:4000', // Service discovery DNS
+        NODE_ENV: 'production',
       },
     });
-    app2Container.addPortMappings({ containerPort: 4001 });
 
-    // App2 ECS Service
-    new ecs.FargateService(this, 'App2Service', {
+    container.addPortMappings({
+      containerPort: 4001,
+    });
+
+    // Create a Security Group
+    const securityGroup = new ec2.SecurityGroup(this, 'GrpcServiceSG', {
+      vpc,
+      description: 'Allow traffic for Fargate service',
+      allowAllOutbound: true,
+    });
+
+    // Allow traffic from the NLB to the Fargate service
+    securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(4001), 'Allow traffic on port 4001');
+
+    // Create the Fargate service
+    const service = new ecs.FargateService(this, 'GrpcService', {
       cluster,
-      taskDefinition: app2TaskDef,
+      taskDefinition,
+      securityGroups: [securityGroup],
       desiredCount: 1,
-      securityGroups: [serviceSecurityGroup],
+    });
+
+    // Create a Network Load Balancer
+    const nlb = new elbv2.NetworkLoadBalancer(this, 'GrpcNlb', {
+      vpc,
+      internetFacing: true,
+    });
+
+    const listener = nlb.addListener('GrpcListener', {
+      port: 4001,
+    });
+
+    listener.addTargets('GrpcTarget', {
+      port: 4001,
+      targets: [service.loadBalancerTarget({
+        containerName: 'GrpcContainer',
+        containerPort: 4001,
+      })],
+      healthCheck: {
+        port: '4001',
+        protocol: elbv2.Protocol.HTTP,
+        path: '/',
+      },
+    });
+
+    // Enable autoscaling
+    const scaling = service.autoScaleTaskCount({ maxCapacity: 3 });
+    scaling.scaleOnCpuUtilization('CpuScaling', {
+      targetUtilizationPercent: 50,
     });
   }
 }

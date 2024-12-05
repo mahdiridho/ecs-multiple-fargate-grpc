@@ -1,0 +1,13 @@
+{
+  "name": "grpc-client",
+  "version": "1.0.0",
+  "description": "A gRPC client application for Fargate",
+  "main": "client.js",
+  "scripts": {
+    "start": "node client.js"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.8.3",
+    "@grpc/proto-loader": "^0.7.5"
+  }
+}

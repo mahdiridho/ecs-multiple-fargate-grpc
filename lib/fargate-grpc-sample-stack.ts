@@ -28,43 +28,45 @@ export class FargateGrpcSampleStack extends Stack {
       iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy')
     );
 
-    // Create a Fargate Task Definition
-    const taskDefinition = new ecs.FargateTaskDefinition(this, 'GrpcTaskDef', {
+    // Create Task Definition for gRPC Server (Existing Fargate Service)
+    const grpcServerTaskDef = new ecs.FargateTaskDefinition(this, 'GrpcServerTaskDef', {
       memoryLimitMiB: 512,
       cpu: 256,
       taskRole,
     });
 
-    const container = taskDefinition.addContainer('GrpcContainer', {
-      image: ecs.ContainerImage.fromAsset('./docker'), // Use Dockerfile from local directory
+    const grpcServerContainer = grpcServerTaskDef.addContainer('GrpcServerContainer', {
+      image: ecs.ContainerImage.fromAsset('./docker/server'), // gRPC server Dockerfile directory
+      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'GrpcServer' }),
       environment: {
-        NODE_ENV: 'production',
+        NODE_ENV: 'development',
+        SERVER_NAME: 'server'
       },
     });
 
-    container.addPortMappings({
+    grpcServerContainer.addPortMappings({
       containerPort: 4001,
     });
 
-    // Create a Security Group
-    const securityGroup = new ec2.SecurityGroup(this, 'GrpcServiceSG', {
+    // Create Security Group for gRPC Server
+    const grpcServerSG = new ec2.SecurityGroup(this, 'GrpcServerSG', {
       vpc,
-      description: 'Allow traffic for Fargate service',
-      allowAllOutbound: true,
+      description: 'Security group for gRPC server',
+      allowAllOutbound: true
     });
 
-    // Allow traffic from the NLB to the Fargate service
-    securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(4001), 'Allow traffic on port 4001');
+    grpcServerSG.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4001), 'Allow gRPC traffic from NLB');
+    grpcServerSG.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(8080), 'Allow health check traffic from NLB');
 
-    // Create the Fargate service
-    const service = new ecs.FargateService(this, 'GrpcService', {
+    // Create gRPC Server Fargate Service
+    const grpcServerService = new ecs.FargateService(this, 'GrpcServerService', {
       cluster,
-      taskDefinition,
-      securityGroups: [securityGroup],
+      taskDefinition: grpcServerTaskDef,
+      securityGroups: [grpcServerSG],
       desiredCount: 1,
     });
 
-    // Create a Network Load Balancer
+    // Create a Network Load Balancer for gRPC Server
     const nlb = new elbv2.NetworkLoadBalancer(this, 'GrpcNlb', {
       vpc,
       internetFacing: true,
@@ -72,25 +74,68 @@ export class FargateGrpcSampleStack extends Stack {
 
     const listener = nlb.addListener('GrpcListener', {
       port: 4001,
+      protocol: elbv2.Protocol.TCP, // NLB uses TCP to support HTTP/2 for gRPC
     });
-
-    listener.addTargets('GrpcTarget', {
-      port: 4001,
-      targets: [service.loadBalancerTarget({
-        containerName: 'GrpcContainer',
+    
+    listener.addTargets('GrpcServerTarget', {
+      port: 4001, // Target gRPC server on port 4001
+      targets: [grpcServerService.loadBalancerTarget({
+        containerName: 'GrpcServerContainer',
         containerPort: 4001,
       })],
       healthCheck: {
-        port: '4001',
-        protocol: elbv2.Protocol.HTTP,
-        path: '/',
+        port: '8080', // Health check HTTP endpoint
+        protocol: elbv2.Protocol.HTTP, // Health check via HTTP
+        path: '/health', // A simple HTTP health check endpoint
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(5), // Increase timeout for slow startups
+        healthyThresholdCount: 2,
+        unhealthyThresholdCount: 2,
       },
     });
 
-    // Enable autoscaling
-    const scaling = service.autoScaleTaskCount({ maxCapacity: 3 });
-    scaling.scaleOnCpuUtilization('CpuScaling', {
+    // Enable autoscaling for gRPC Server
+    const grpcServerScaling = grpcServerService.autoScaleTaskCount({ minCapacity:2, maxCapacity: 3 });
+    grpcServerScaling.scaleOnCpuUtilization('GrpcServerCpuScaling', {
       targetUtilizationPercent: 50,
+    });
+
+    // Create Task Definition for gRPC Client (New Internal Fargate Service)
+    const grpcClientTaskDef = new ecs.FargateTaskDefinition(this, 'GrpcClientTaskDef', {
+      memoryLimitMiB: 512,
+      cpu: 256,
+      taskRole,
+    });
+
+    const grpcClientContainer = grpcClientTaskDef.addContainer('GrpcClientContainer', {
+      image: ecs.ContainerImage.fromAsset('./docker/client'), // gRPC client Dockerfile directory
+      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'GrpcClient' }),
+      environment: {
+        NODE_ENV: 'development',
+        GRPC_SERVER_HOST: nlb.loadBalancerDnsName, // Point to the NLB DNS name
+      },
+    });
+
+    grpcClientContainer.addPortMappings({
+      containerPort: 4000,
+    });
+
+    // Create Security Group for gRPC Client
+    const grpcClientSG = new ec2.SecurityGroup(this, 'GrpcClientSG', {
+      vpc,
+      description: 'Security group for gRPC client',
+      allowAllOutbound: true,
+    });
+
+    grpcClientSG.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4001), 'Allow gRPC client to communicate with server');
+    grpcClientSG.addEgressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4001), 'Allow gRPC client to communicate with server');
+
+    // Create gRPC Client Fargate Service
+    new ecs.FargateService(this, 'GrpcClientService', {
+      cluster,
+      taskDefinition: grpcClientTaskDef,
+      securityGroups: [grpcClientSG],
+      desiredCount: 1,
     });
   }
 }

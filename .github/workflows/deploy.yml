@@ -30,12 +30,13 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ca-central-1
+          aws-region: ${{ secrets.AWS_REGION }}
       
       - name: Bootstrap AWS Account
-        run: npx cdk bootstrap --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess --force aws://${{ secrets.AWS_ACCOUNT_ID }}/ca-central-1
+        run: npx cdk bootstrap --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess --force aws://${{ secrets.AWS_ACCOUNT_ID }}/${{ secrets.AWS_REGION }}
 
       - name: Deploy CDK Stack
         env:
           CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+          CDK_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
         run: npx cdk deploy --all --require-approval never --app "node cdk.out/bin/fargate-grpc-sample.js"

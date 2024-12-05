@@ -1,0 +1,14 @@
+{
+  "name": "grpc-server",
+  "version": "1.0.0",
+  "description": "A gRPC server application for Fargate",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.8.3",
+    "@grpc/proto-loader": "^0.7.5",
+    "express": "^4.21.1"
+  }
+}

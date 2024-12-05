@@ -45,7 +45,7 @@ export class FargateGrpcSampleStack extends Stack {
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'GrpcServer1' }),
       environment: {
         NODE_ENV: 'production',
-        SERVER_NAME: 'server1'
+        SERVER_PORT: '4001'
       },
     });
     const grpcServerContainer2 = grpcServerTaskDef2.addContainer('GrpcServerContainer2', {
@@ -53,7 +53,7 @@ export class FargateGrpcSampleStack extends Stack {
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'GrpcServer2' }),
       environment: {
         NODE_ENV: 'production',
-        SERVER_NAME: 'server2'
+        SERVER_PORT: '4002'
       },
     });
 
@@ -61,7 +61,7 @@ export class FargateGrpcSampleStack extends Stack {
       containerPort: 4001,
     });
     grpcServerContainer2.addPortMappings({
-      containerPort: 4001,
+      containerPort: 4002,
     });
 
     // Create Security Group for gRPC Server
@@ -71,7 +71,9 @@ export class FargateGrpcSampleStack extends Stack {
       allowAllOutbound: true
     });
 
-    grpcServerSG.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4001), 'Allow gRPC traffic from NLB');
+    grpcServerSG.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4001), 'Allow gRPC server1 traffic from NLB');
+    grpcServerSG.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4002), 'Allow gRPC server2 traffic from NLB');
+    grpcServerSG.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4003), 'Allow gRPC server traffic from NLB');
     grpcServerSG.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(8080), 'Allow health check traffic from NLB');
 
     // Create gRPC Server Fargate Service
@@ -95,18 +97,18 @@ export class FargateGrpcSampleStack extends Stack {
     });
 
     const listener = nlb.addListener('GrpcListener', {
-      port: 4001,
+      port: 4003,
       protocol: elbv2.Protocol.TCP, // NLB uses TCP to support HTTP/2 for gRPC
     });
     
     listener.addTargets('GrpcServerTarget', {
-      port: 4001, // Target gRPC server on port 4001
+      // port: 4001, // Target gRPC server on port 4001
       targets: [grpcServerService1.loadBalancerTarget({
         containerName: 'GrpcServerContainer1',
         containerPort: 4001,
       }), grpcServerService2.loadBalancerTarget({
         containerName: 'GrpcServerContainer2',
-        containerPort: 4001,
+        containerPort: 4002,
       })],
       healthCheck: {
         port: '8080', // Health check HTTP endpoint
@@ -156,7 +158,9 @@ export class FargateGrpcSampleStack extends Stack {
       allowAllOutbound: true,
     });
 
-    grpcClientSG.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4001), 'Allow gRPC client to communicate with server');
+    grpcClientSG.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4001), 'Allow gRPC client to communicate with server1');
+    grpcClientSG.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4002), 'Allow gRPC client to communicate with server2');
+    grpcClientSG.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(4003), 'Allow gRPC client to communicate with server2');
 
     // Create gRPC Client Fargate Service
     new ecs.FargateService(this, 'GrpcClientService', {

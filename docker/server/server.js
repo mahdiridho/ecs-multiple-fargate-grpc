@@ -11,14 +11,15 @@ const grpcService = grpcObject.MyService;
 // gRPC Server
 const grpcServer = new grpc.Server();
 
+const GRPC_PORT = Number(process.env.SERVER_PORT);
+
 grpcServer.addService(grpcService.service, {
   sayHello: (call, callback) => {
     console.log(`Received message: ${call.request.message}`);
-    callback(null, { message: 'Hello from gRPC Server' });
+    callback(null, { message: `Hello from gRPC Server in port ${GRPC_PORT}` });
   },
 });
 
-const GRPC_PORT = 4001;
 grpcServer.bindAsync(`0.0.0.0:${GRPC_PORT}`, grpc.ServerCredentials.createInsecure(), () => {
   console.log(`gRPC Server running on port ${GRPC_PORT}`);
 });

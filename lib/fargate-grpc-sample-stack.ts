@@ -4,6 +4,7 @@ import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as pinpoint from 'aws-cdk-lib/aws-pinpoint';
 
 export class FargateGrpcSampleStack extends Stack {
   constructor(scope: cdk.App, id: string, props?: StackProps) {
@@ -27,6 +28,35 @@ export class FargateGrpcSampleStack extends Stack {
     taskRole.addManagedPolicy(
       iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy')
     );
+
+    // 3. Create an Email Template
+    const emailTemplate = new pinpoint.CfnEmailTemplate(this, 'EmailTemplate', {
+      templateName: 'testEmailTemplate', // Unique name for the email template
+      subject: 'Hello From Pinpoint', // Email subject
+      textPart: 'Hello {{UserName}},\nThis is a test email from Pinpoint.', // Plain text content
+      htmlPart: `<html>
+                    <head></head>
+                    <body>
+                      <h1>Hello {{UserName}},</h1>
+                      <p>This is a test email from Pinpoint.</p>
+                    </body>
+                  </html>`, // HTML content with dynamic placeholder
+      // Optional: Add a description
+      // templateDescription: 'A test email template for Pinpoint',
+    });
+
+    // taskRole.addToPolicy(new iam.PolicyStatement({
+    //   effect: iam.Effect.ALLOW,
+    //   actions: [
+    //     'mobiletargeting:SendMessages',
+    //     'mobiletargeting:GetEmailTemplate',
+    //     // Add other necessary Pinpoint actions as needed
+    //   ],
+    //   resources: [
+    //     // Optionally, restrict to the specific email template
+    //     `arn:aws:mobiletargeting:${process.env.CDK_DEFAULT_REGION}:${process.env.CDK_DEFAULT_ACCOUNT}:templates/${emailTemplate.templateName}/*`,
+    //   ],
+    // }));
 
     // Create Task Definition for gRPC Server (Existing Fargate Service)
     const grpcServerTaskDef = new ecs.FargateTaskDefinition(this, 'GrpcServerTaskDef', {
